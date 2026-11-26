@@ -44,6 +44,8 @@ test('Compose: der Server hängt nur am internen Netz, ohne Ports; internal ist 
     assert.equal(server.ports, undefined, `${file}: Server darf keine Ports veröffentlichen`);
     assert.equal(server.network_mode, undefined);
     assert.equal(config.networks.internal.internal, true, `${file}: Netz internal muss internal: true sein`);
+    // ohne inhibit_ipv4 wären Dienste des Hosts über die Gateway-Adresse des Netzes erreichbar
+    assert.equal(config.networks.internal.driver_opts?.['com.docker.network.bridge.inhibit_ipv4'], 'true', `${file}: inhibit_ipv4`);
     assert.equal(server.environment.GSC_EGRESS_PROXY, 'http://egress:3128');
   }
 });

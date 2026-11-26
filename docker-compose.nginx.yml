@@ -143,9 +143,12 @@ services:
     mem_limit: 128m
 
 networks:
-  # Kein Internet, keine veröffentlichten Ports
+  # Kein Internet, keine veröffentlichten Ports. inhibit_ipv4: die Bridge bekommt keine Adresse auf dem Host,
+  # sonst wären Dienste des Hosts (z. B. eine Datenbank auf 0.0.0.0) über die Gateway-Adresse erreichbar.
   internal:
     internal: true
+    driver_opts:
+      com.docker.network.bridge.inhibit_ipv4: "true"
   # Nur für den veröffentlichten Loopback-Port der Weiterleitung
   published:
   # Nur für den Egress-Proxy

@@ -78,6 +78,24 @@ echo '--- Egress'
 docker exec "$PROJECT-gsc-mcp-1" /nodejs/bin/node -e '
 fetch("https://example.com/", { signal: AbortSignal.timeout(5000) }).then(() => process.stdout.write("erreichbar"), () => process.stdout.write("gesperrt"));' > "$WORK/e"
 check 'Server erreicht das Internet nicht direkt' "$(cat "$WORK/e")" gesperrt
+# Dienst auf dem Host (lauscht auf 0.0.0.0): darf aus dem internen Netz nicht erreichbar sein
+docker run -d --rm --network host --name "$PROJECT-hostprobe" --entrypoint /nodejs/bin/node gsc-mcp:local \
+  -e 'require("net").createServer((s) => s.end("HOSTDIENST")).listen(18998, "0.0.0.0")' >/dev/null
+sleep 1
+server_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$PROJECT-gsc-mcp-1")
+docker exec "$PROJECT-gsc-mcp-1" /nodejs/bin/node -e '
+let found = "";
+const hosts = process.argv.slice(1);
+let open = hosts.length;
+for (const h of hosts) {
+  const s = require("net").connect(18998, h);
+  const done = () => { s.destroy(); if (--open === 0) process.stdout.write(found || "gesperrt"); };
+  s.setTimeout(3000, done);
+  s.on("data", (d) => { if (String(d).includes("HOSTDIENST")) found += h + " "; done(); });
+  s.on("error", done);
+}' "${server_ip%.*}.1" 172.17.0.1 > "$WORK/h"
+docker rm -f "$PROJECT-hostprobe" >/dev/null 2>&1 || true
+check 'Host-Dienste aus dem internen Netz nicht erreichbar' "$(cat "$WORK/h")" gesperrt
 connect_via_proxy() {
   docker exec "$PROJECT-gsc-mcp-1" /nodejs/bin/node -e '
 const s = require("net").connect(3128, "egress", () => s.write(`CONNECT ${process.argv[1]} HTTP/1.1\r\nHost: ${process.argv[1]}\r\n\r\n`));
