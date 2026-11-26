@@ -1,0 +1,40 @@
+{
+  "name": "gsc-mcp",
+  "version": "0.1.0",
+  "description": "MCP-Server für die Google Search Console: eigene Tokens, Property-Whitelist je Token, ein Service Account je Mandant",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "bin": {
+    "gsc-mcp": "dist/stdio.js",
+    "gsc-mcp-http": "dist/http.js",
+    "gsc-admin": "dist/admin.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/http.js",
+    "start:stdio": "node dist/stdio.js",
+    "admin": "node src/admin.ts",
+    "test": "node --test 'test/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@googleapis/searchconsole": "^11.0.1",
+    "@modelcontextprotocol/node": "^2.1.2",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "google-auth-library": "^11.3.4",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.4.0",
+    "@types/node": "^24.19.4",
+    "typescript": "^7.0.2"
+  }
+}

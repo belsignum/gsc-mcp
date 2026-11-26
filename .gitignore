@@ -1,0 +1,25 @@
+# Abhängigkeiten und Build
+node_modules/
+dist/
+
+# Geheimnisse: nie committen
+.env
+.env.*
+!.env.example
+secrets/
+config/
+tokens.yaml
+*.pem
+*.key
+*.p12
+# Service-Account-Schlüssel sind JSON-Dateien. Deshalb ist jede JSON-Datei ausgeschlossen,
+# außer den ausdrücklich freigegebenen.
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+
+# Laufzeitdaten
+audit/
+*.log
+.DS_Store
