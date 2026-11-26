@@ -250,3 +250,18 @@ describe('Aufruflimit je Token', () => {
     }
   });
 });
+
+describe('Debug-Logging der Google-Bibliotheken', () => {
+  test('GOOGLE_SDK_NODE_LOGGING wird beim Start entfernt (würde Access Tokens loggen)', async () => {
+    const { GoogleClients } = await import('../src/google.ts');
+    process.env.GOOGLE_SDK_NODE_LOGGING = '*';
+    const original = console.error;
+    console.error = () => {};
+    try {
+      new GoogleClients({ keyDir: fixture.keyDir });
+    } finally {
+      console.error = original;
+    }
+    assert.equal(process.env.GOOGLE_SDK_NODE_LOGGING, undefined);
+  });
+});
