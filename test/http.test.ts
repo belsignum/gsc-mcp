@@ -98,6 +98,55 @@ describe('HTTP-Eingang', () => {
   });
 });
 
+describe('Review-Befunde: Batches, Streams, Gleichzeitigkeit, Log', () => {
+  test('JSON-RPC-Batches werden abgelehnt (sonst bis zu 100 Tool-Aufrufe je Request)', async () => {
+    const call = (id: number) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'gsc_whoami', arguments: {} } });
+    const response = await rawPost(mcp.url, { token: fixture.tokens.a, body: JSON.stringify([call(1), call(2)]) });
+    assert.equal(response.status, 400);
+    assert.match(await response.text(), /Batches/);
+    assert.equal((await rawPost(mcp.url, { token: fixture.tokens.a, body: '{kaputt' })).status, 400);
+  });
+
+  test('subscriptions/listen öffnet keinen Stream, der einen Widerruf überdauern könnte', async () => {
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'subscriptions/listen',
+      params: {
+        notifications: { toolsListChanged: true },
+        _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientInfo': { name: 'x', version: '1' }, 'io.modelcontextprotocol/clientCapabilities': {} },
+      },
+    });
+    const response = await rawPost(mcp.url, { token: fixture.tokens.a, body, headers: { 'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': 'subscriptions/listen' } });
+    // Die Antwort muss vollständig ankommen und enden; ein offener Stream würde hier hängen bleiben
+    const text = await Promise.race([response.text(), new Promise<string>((_, reject) => setTimeout(() => reject(new Error('Stream bleibt offen')), 3000))]);
+    assert.match(text, /limit|error/i);
+  });
+
+  test('Höchstens 8 gleichzeitige Requests je Token; andere Tokens sind nicht betroffen', async () => {
+    fixture.google.control.delayMs = 400;
+    try {
+      const call = (token: string, property: string) =>
+        rawPost(mcp.url, { token, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'gsc_list_sitemaps', arguments: { property } } }) }).then(async (r) => {
+          await r.text();
+          return r.status;
+        });
+      const statuses = await Promise.all([...Array.from({ length: 12 }, () => call(fixture.tokens.a, 'sc-domain:kunde-a.example')), call(fixture.tokens.b, 'sc-domain:kunde-b.example')]);
+      assert.equal(statuses.slice(0, 12).filter((s) => s === 429).length, 4);
+      assert.equal(statuses[12], 200);
+    } finally {
+      fixture.google.control.delayMs = 0;
+    }
+  });
+
+  test('Werte aus dem Request können keine Zeilen ins Server-Log schreiben', async () => {
+    const { cleanLogLine } = await import('../src/http.ts');
+    const line = cleanLogLine('Tool x\n[gsc-mcp] Freigaben neu geladen: 0 Tokens\u001b[31m');
+    assert.ok(!/[\n\r\u001b]/.test(line), line);
+    assert.ok(cleanLogLine('x'.repeat(10_000)).length <= 501);
+  });
+});
+
 describe('Bausteine der Zugangsprüfung', () => {
   test('bearerToken akzeptiert nur das Token-Format dieses Dienstes', () => {
     const token = generateToken();

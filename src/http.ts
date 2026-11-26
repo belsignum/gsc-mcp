@@ -11,7 +11,7 @@ import { createMcpHandler } from '@modelcontextprotocol/server';
 import { hostHeaderValidation, originValidation, toNodeHandler } from '@modelcontextprotocol/node';
 import { AuditLog } from './audit.ts';
 import { bearerToken, FailureLimiter, rateLimitKey } from './auth.ts';
-import { Budget, CALL_LIMIT } from './budget.ts';
+import { Budget, CALL_LIMIT, DAILY_LIMIT } from './budget.ts';
 import { flag, loadConfig } from './config.ts';
 import { GoogleClients } from './google.ts';
 import { createGscServer, SERVER_INFO } from './server.ts';
@@ -23,8 +23,9 @@ export interface HttpOptions {
   audit: AuditLog | undefined;
   /** URL-Prüfungen je Mandant und Tag; eine Instanz für alle Requests */
   inspections: Budget;
-  /** Abfragen an Google je Token und Minute; eine Instanz für alle Requests */
+  /** Aufrufe je Token und Minute bzw. Tag; je eine Instanz für alle Requests */
   calls: Budget;
+  daily: Budget;
   /** Hostnamen, unter denen der Server erreichbar sein darf (Schutz vor DNS-Rebinding). */
   allowedHosts: string[];
   /** true: Client-IP aus X-Forwarded-For lesen (nur hinter einem eigenen Reverse Proxy setzen). */
@@ -37,6 +38,47 @@ export interface HttpOptions {
 
 const LOCALHOST = ['localhost', '127.0.0.1', '[::1]'];
 const MAX_BODY_BYTES = 1024 * 1024;
+/** Gleichzeitige Requests je Token: ein Token soll nicht alle Verbindungen des Dienstes belegen können. */
+const MAX_CONCURRENT_PER_TOKEN = 8;
+
+/** Steuerzeichen und Länge begrenzen: Meldungen des SDK können Werte aus dem Request enthalten (Log-Injection). */
+export function cleanLogLine(message: string): string {
+  const clean = message.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  return clean.length > 500 ? `${clean.slice(0, 500)}…` : clean;
+}
+
+class BodyError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/**
+ * Liest den Body selbst (höchstens 1 MB, auch ohne Content-Length) und prüft ihn, bevor das SDK ihn sieht:
+ * genau eine JSON-RPC-Nachricht. Batches gehören seit dem Protokollstand 2025-06-18 nicht mehr zu MCP; sie würden
+ * bis zu 100 Tool-Aufrufe in einem Request erlauben.
+ */
+async function readMessage(req: IncomingMessage): Promise<unknown> {
+  if (Number(req.headers['content-length'] ?? 0) > MAX_BODY_BYTES) throw new BodyError(413, 'Anfrage zu groß.');
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > MAX_BODY_BYTES) throw new BodyError(413, 'Anfrage zu groß.');
+    chunks.push(chunk as Buffer);
+  }
+  let message: unknown;
+  try {
+    message = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    throw new BodyError(400, 'Ungültiges JSON.');
+  }
+  if (Array.isArray(message)) throw new BodyError(400, 'JSON-RPC-Batches werden nicht unterstützt: eine Nachricht pro Request.');
+  if (message === null || typeof message !== 'object') throw new BodyError(400, 'Erwartet wird eine JSON-RPC-Nachricht.');
+  return message;
+}
 const UNAUTHORIZED = 'Gültiger Header "Authorization: Bearer <gsc-Token>" erforderlich.';
 
 type AuthedRequest = IncomingMessage & { auth?: { token: string; clientId: string; scopes: string[]; extra?: Record<string, unknown> } };
@@ -59,7 +101,10 @@ function clientIp(req: IncomingMessage, trustProxy: boolean): string {
 
 export function createHttpServer(options: HttpOptions) {
   const path = options.path ?? '/mcp';
-  const log = options.log ?? ((message: string) => console.error(message));
+  const write = options.log ?? ((message: string) => console.error(message));
+  const log = (message: string) => write(cleanLogLine(message));
+  /** Laufende Requests je Token */
+  const running = new Map<string, number>();
   const allowed = [...new Set([...options.allowedHosts, ...LOCALHOST])];
   const validateHost = hostHeaderValidation(allowed);
   const validateOrigin = originValidation(allowed);
@@ -76,9 +121,16 @@ export function createHttpServer(options: HttpOptions) {
         audit: options.audit,
         inspections: options.inspections,
         calls: options.calls,
+        daily: options.daily,
       });
     },
-    { maxRequestBodySize: MAX_BODY_BYTES, onerror: (error) => log(`[gsc-mcp] ${error.message}`) },
+    {
+      maxRequestBodySize: MAX_BODY_BYTES,
+      // Der Dienst verschickt keine Benachrichtigungen. Offene subscriptions/listen-Streams würden nur
+      // Verbindungen belegen und einen Widerruf überdauern; 0 lehnt jeden ab.
+      maxSubscriptions: 0,
+      onerror: (error) => log(`[gsc-mcp] ${error.message}`),
+    },
   );
   const nodeHandler = toNodeHandler(handler, { maxRequestBodySize: MAX_BODY_BYTES, onerror: (error) => log(`[gsc-mcp] ${error.message}`) });
 
@@ -135,12 +187,37 @@ export function createHttpServer(options: HttpOptions) {
       return;
     }
 
+    const active = running.get(identity.tokenId) ?? 0;
+    if (active >= MAX_CONCURRENT_PER_TOKEN) {
+      sendJson(res, 429, { error: 'Zu viele gleichzeitige Anfragen mit diesem Token.' }, { 'Retry-After': '1' });
+      return;
+    }
+    running.set(identity.tokenId, active + 1);
+    res.once('close', () => {
+      const left = (running.get(identity.tokenId) ?? 1) - 1;
+      if (left > 0) running.set(identity.tokenId, left);
+      else running.delete(identity.tokenId);
+    });
+
+    let message: unknown;
+    if (req.method === 'POST') {
+      try {
+        message = await readMessage(req);
+      } catch (error) {
+        if (!(error instanceof BodyError)) throw error;
+        sendJson(res, error.status, { error: error.message }, { Connection: 'close' });
+        req.resume();
+        return;
+      }
+    }
+
     // toNodeHandler reicht req.auth als authInfo an die Server-Factory weiter. Der Token selbst bleibt hier.
     req.auth = { token: identity.tokenId, clientId: `gsc-${identity.tokenId}`, scopes: [], extra: { identity, tenant: snapshot.tenants.get(identity.tenant) } };
-    await nodeHandler(req, res);
+    await nodeHandler(req, res, message);
   }
 
-  const server = createServer((req, res) => {
+  // connectionsCheckingInterval: Header- und Request-Timeout werden alle 5 s statt alle 30 s durchgesetzt
+  const server = createServer({ connectionsCheckingInterval: 5_000 }, (req, res) => {
     handle(req, res).catch((error: unknown) => {
       log(`[gsc-mcp] ${error instanceof Error ? error.message : String(error)}`);
       if (!res.headersSent) sendJson(res, 500, { error: 'Interner Fehler.' });
@@ -166,7 +243,7 @@ async function main(): Promise<void> {
   const trustProxy = flag(process.env.MCP_TRUST_PROXY);
   if (!config.auditDir) throw new Error('GSC_AUDIT_DIR fehlt: ohne Audit-Log startet der HTTP-Server nicht.');
 
-  const audit = await AuditLog.open(config.auditDir, { retentionDays: config.auditRetentionDays, maxBytes: config.auditMaxBytes });
+  const audit = await AuditLog.open(config.auditDir, { retentionDays: config.auditRetentionDays, maxBytes: config.auditMaxBytes, warn: (message) => console.error(message) });
   const store = await TokenStore.open(config.configFile, { log: (message) => console.error(message) });
   const google = new GoogleClients({ keyDir: config.keyDir, proxy: config.egressProxy });
 
@@ -176,6 +253,7 @@ async function main(): Promise<void> {
     audit,
     inspections: new Budget(config.maxInspectionsPerDay),
     calls: new Budget(config.maxCallsPerMinute, { windowMs: 60_000, message: CALL_LIMIT }),
+    daily: new Budget(config.maxCallsPerDay, { message: DAILY_LIMIT }),
     allowedHosts,
     trustProxy,
   });

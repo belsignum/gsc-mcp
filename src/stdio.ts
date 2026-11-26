@@ -11,7 +11,7 @@ import { readFile } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { AuditLog } from './audit.ts';
-import { Budget, CALL_LIMIT } from './budget.ts';
+import { Budget, CALL_LIMIT, DAILY_LIMIT } from './budget.ts';
 import { loadConfig } from './config.ts';
 import { GoogleClients, parseServiceAccountKey } from './google.ts';
 import { createGscServer } from './server.ts';
@@ -36,9 +36,10 @@ async function main(): Promise<void> {
   const audit = config.auditDir ? await AuditLog.open(config.auditDir, { retentionDays: config.auditRetentionDays, maxBytes: config.auditMaxBytes }) : undefined;
   const inspections = new Budget(config.maxInspectionsPerDay);
   const calls = new Budget(config.maxCallsPerMinute, { windowMs: 60_000, message: CALL_LIMIT });
+  const daily = new Budget(config.maxCallsPerDay, { message: DAILY_LIMIT });
   const identity = { tokenId: 'local', user: userInfo().username || 'local', tenant: tenant.name, properties: Object.freeze(properties) };
 
-  serveStdio(() => createGscServer({ identity, tenant, google, audit, inspections, calls }), {
+  serveStdio(() => createGscServer({ identity, tenant, google, audit, inspections, calls, daily }), {
     onerror: (error) => console.error('[gsc-mcp]', error.message),
   });
 }

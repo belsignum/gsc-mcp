@@ -33,7 +33,7 @@ Es gibt bewusst **keine schreibenden Tools**: Sitemaps einreichen oder löschen,
 
 **Limits:**
 
-- **Abfragen je Token:** höchstens 60 pro Minute (`GSC_MAX_CALLS_PER_MINUTE`). Alle Mandanten teilen sich das Kontingent des Google-Cloud-Projekts; ein Agent in einer Schleife soll es nicht für alle aufbrauchen.
+- **Aufrufe je Token:** höchstens 60 pro Minute und 2000 pro Tag (`GSC_MAX_CALLS_PER_MINUTE`, `GSC_MAX_CALLS_PER_DAY`), dazu höchstens 8 gleichzeitige Requests. Es zählt jeder Aufruf, auch abgelehnte. Alle Mandanten teilen sich das Kontingent des Google-Cloud-Projekts und das Audit-Log; ein Agent in einer Schleife soll keines von beiden für alle aufbrauchen.
 - **URL-Prüfungen je Mandant:** höchstens 500 pro Tag (`GSC_MAX_INSPECTIONS_PER_DAY`). Google erlaubt je Property 2000 pro Tag.
 
 ## Audit-Log
@@ -48,7 +48,8 @@ Jeder Tool-Aufruf und jede Änderung über `gsc-admin` steht im Audit-Log: eine 
 
 - **Inhalt:** wer, welches Tool, welche Property, welche Parameter, Ergebnis (`ok`, `denied`, `error`), interner Grund (`whitelist`, `google_403`, `limit` …), Zeilenzahl und Dauer. **Nie** der Token, sein Hash, ein Schlüssel oder die Daten, die Google geliefert hat.
 - **Ohne Protokoll keine Daten:** Lässt sich ein Aufruf nicht protokollieren, gibt der Dienst das Ergebnis nicht heraus.
-- **Aufbewahrung:** 365 Tage (`GSC_AUDIT_RETENTION_DAYS`), höchstens 100 MB (`GSC_AUDIT_MAX_MB`). Ist das Log voll, liefert der Dienst keine Daten mehr, bis alte Monatsdateien ablaufen oder der Wert erhöht wird.
+- **Größe:** höchstens 2 kB je Zeile (lange Parameter werden weggelassen), rund 400 Byte im Normalfall. Von Ablehnungen wegen eines Limits kommt nur die erste ins Log.
+- **Aufbewahrung:** 365 Tage (`GSC_AUDIT_RETENTION_DAYS`), höchstens 500 MB (`GSC_AUDIT_MAX_MB`), das reicht für etwa 1000 Aufrufe am Tag über drei Jahre. Ab 80 % steht eine Warnung im Server-Log. Ist das Log voll, liefert der Dienst keine Daten mehr, bis alte Monatsdateien ablaufen oder der Wert erhöht wird.
 
 ## Betrieb
 
@@ -104,10 +105,11 @@ Erwartete Antwort: `{"status":"ok"}`. Danach Mandanten und Tokens anlegen (näch
 | `MCP_DOMAIN` | ja | Öffentlicher Hostname; für TLS und den Host-Check |
 | `MCP_PORT` | ja (NGINX-Variante) | Port auf `127.0.0.1`, an den das vorhandene NGINX weiterleitet |
 | `MCP_TRUST_PROXY` | nein | `true` = Client-IP aus `X-Forwarded-For` (die Caddy-Variante setzt es, die NGINX-Variante nur nach Prüfung, siehe [DEPLOY.md](DEPLOY.md)) |
-| `GSC_MAX_CALLS_PER_MINUTE` | nein | Abfragen an Google je Token und Minute (Standard 60, `0` = unbegrenzt) |
+| `GSC_MAX_CALLS_PER_MINUTE` | nein | Aufrufe je Token und Minute (Standard 60, `0` = unbegrenzt) |
+| `GSC_MAX_CALLS_PER_DAY` | nein | Aufrufe je Token und Tag (Standard 2000, `0` = unbegrenzt) |
 | `GSC_MAX_INSPECTIONS_PER_DAY` | nein | URL-Prüfungen je Mandant und Tag (Standard 500, `0` = unbegrenzt) |
 | `GSC_AUDIT_RETENTION_DAYS` | nein | Aufbewahrung des Audit-Logs in Tagen (Standard 365, `0` = unbegrenzt) |
-| `GSC_AUDIT_MAX_MB` | nein | Maximale Größe des Audit-Logs (Standard 100, `0` = unbegrenzt) |
+| `GSC_AUDIT_MAX_MB` | nein | Maximale Größe des Audit-Logs (Standard 500, `0` = unbegrenzt) |
 
 Die Compose-Dateien setzen außerdem `GSC_EGRESS_PROXY`, `GSC_CONFIG`, `GSC_KEY_DIR` und `GSC_AUDIT_DIR`; die bleiben unverändert.
 
@@ -156,6 +158,7 @@ Der Token erscheint **genau einmal**; gespeichert wird nur sein SHA-256-Hash. Ih
 | `tenant list` | Mandanten mit Service Account und Zahl der Tokens |
 | `tenant remove kunde-a` | Mandant und Schlüssel löschen (nur ohne Tokens) |
 | `check` | Freigabedatei und Schlüssel prüfen |
+| `unlock` | Sperre eines abgebrochenen `gsc-admin`-Aufrufs entfernen (wird nie automatisch entfernt) |
 
 ## Clients verbinden
 
@@ -238,7 +241,7 @@ npm install && npm run build
 - **Schutz gegen Token-Raten:** Nach 10 Fehlversuchen in 5 Minuten wird die IP-Adresse (IPv6: das /64-Netz) für unbekannte Tokens gesperrt (`429`). Gültige Tokens arbeiten weiter.
 - **Container gehärtet:** Laufzeit-Image ohne Shell und Paketmanager (distroless), Nutzer `nonroot`, schreibgeschütztes Dateisystem, keine Capabilities, Node Permission Model, Ressourcenlimits.
 - **Ausgehend nur zu Google:** Der Server hängt an einem internen Docker-Netz ohne Internet und ohne Zugang zu Diensten des Hosts. Ins Internet kommt er nur über den Egress-Proxy, und der lässt nur `oauth2.googleapis.com` und `searchconsole.googleapis.com` zu.
-- **Host-Check gegen DNS-Rebinding,** Requests bis 1 MB, kein Access-Log mit Tokens.
+- **Host-Check gegen DNS-Rebinding,** Requests bis 1 MB, eine JSON-RPC-Nachricht je Request, keine offenen Streams, kein Access-Log mit Tokens.
 - **Texte aus der Search Console sind Daten, keine Anweisungen.** Suchanfragen stammen von beliebigen Menschen im Internet und können präparierte Anweisungen enthalten.
 
 Das vollständige Sicherheitsreview mit Befunden, Nachweisen und verbleibenden Risiken steht in [SECURITY.md](SECURITY.md).

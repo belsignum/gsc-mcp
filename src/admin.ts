@@ -50,6 +50,7 @@ const USAGE = `gsc-admin – Mandanten und Tokens für gsc-mcp verwalten
   token revoke <id>           Token widerrufen (wirkt nach spätestens einer Sekunde)
 
   check                       Freigabedatei und Schlüssel prüfen
+  unlock                      liegengebliebene Sperre eines abgebrochenen Aufrufs entfernen
 
 Properties in exakter Schreibweise der Search Console: sc-domain:example.com oder https://www.example.com/
 Beispiel: docker compose run --rm -T gsc-admin tenant add kunde-a < kunde-a.json`;
@@ -84,17 +85,29 @@ async function writeSecret(file: string, text: string): Promise<void> {
   });
 }
 
-/** Verhindert, dass zwei gsc-admin-Aufrufe gleichzeitig dieselbe Datei ändern. */
+function lockFile(configFile: string): string {
+  return join(dirname(configFile), '.gsc-admin.lock');
+}
+
+/**
+ * Verhindert, dass zwei gsc-admin-Aufrufe gleichzeitig dieselbe Datei ändern. Eine liegengebliebene Sperre
+ * (abgebrochener Aufruf) wird nie automatisch entfernt: zwei Aufrufe könnten sie sonst gleichzeitig für veraltet
+ * halten und beide schreiben, und ein Widerruf ginge verloren. Entfernen nur mit "gsc-admin unlock".
+ */
 async function withLock<T>(configFile: string, fn: () => Promise<T>): Promise<T> {
-  const lock = join(dirname(configFile), '.gsc-admin.lock');
-  const info = await stat(lock).catch(() => undefined);
-  if (info && Date.now() - info.mtimeMs > LOCK_STALE_MS) await rm(lock, { force: true });
+  const lock = lockFile(configFile);
   let handle;
   try {
     handle = await open(lock, 'wx', 0o600);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new UsageError('Ein anderer gsc-admin-Aufruf läuft gerade. Bitte kurz warten.');
-    throw error;
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    const info = await stat(lock).catch(() => undefined);
+    const age = info ? Math.round((Date.now() - info.mtimeMs) / 1000) : 0;
+    throw new UsageError(
+      age * 1000 > LOCK_STALE_MS
+        ? `Eine Sperre von einem früheren Aufruf liegt seit ${age} s. Läuft sicher kein anderer gsc-admin-Aufruf, mit "gsc-admin unlock" entfernen.`
+        : 'Ein anderer gsc-admin-Aufruf läuft gerade. Bitte kurz warten.',
+    );
   }
   await handle.close();
   try {
@@ -170,7 +183,7 @@ export async function runAdmin(argv: string[], io: AdminIo): Promise<number> {
 
   try {
     // Audit-Log vor jeder Änderung öffnen: ist es nicht beschreibbar, wird nichts geändert
-    const changes = !(command === 'list' || area === 'check');
+    const changes = !(command === 'list' || area === 'check' || area === 'unlock');
     if (auditDir && changes) audit = await AuditLog.open(auditDir, { retentionDays: count(env, 'GSC_AUDIT_RETENTION_DAYS', 365), prune: false });
 
     if (area === 'tenant' && command === 'add') {
@@ -295,6 +308,14 @@ export async function runAdmin(argv: string[], io: AdminIo): Promise<number> {
       });
       await record('token.revoke', { tokenId: arg, ...removed });
       io.err(`Token ${arg} widerrufen.\n`);
+      return 0;
+    }
+
+    if (area === 'unlock' && !command) {
+      const lock = lockFile(configFile);
+      const existed = await stat(lock).then(() => true, () => false);
+      await rm(lock, { force: true });
+      io.err(existed ? 'Sperre entfernt.\n' : 'Es lag keine Sperre.\n');
       return 0;
     }
 

@@ -79,11 +79,14 @@ describe('Egress-Proxy', () => {
     assert.equal(status, 405);
   });
 
-  test('isPublicAddress', () => {
-    for (const ip of ['10.1.2.3', '172.20.0.1', '192.168.1.1', '127.0.0.1', '169.254.169.254', '100.64.0.1', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1', '0.0.0.0', 'kein-ip']) {
+  test('isPublicAddress: nur öffentliche IPv4-Adressen; IPv6 nie (NAT64, 6to4, Teredo können auf alles zeigen)', () => {
+    for (const ip of ['10.1.2.3', '172.20.0.1', '192.168.1.1', '127.0.0.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', 'kein-ip']) {
       assert.equal(isPublicAddress(ip), false, ip);
     }
-    for (const ip of ['142.250.185.106', '2a00:1450:4001:80b::200a']) assert.equal(isPublicAddress(ip), true, ip);
+    for (const ip of ['::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1', '64:ff9b::7f00:1', '::7f00:1', '::127.0.0.1', '::ffff:0:7f00:1', '2002:7f00:1::1', '2001:0:4136:e378:8000:63bf:3fff:fdd2', 'fec0::1', '2a00:1450:4001:80b::200a']) {
+      assert.equal(isPublicAddress(ip), false, ip);
+    }
+    assert.equal(isPublicAddress('142.250.185.106'), true);
   });
 
   test('parseAllow: Standard sind genau die beiden Google-Ziele', () => {
@@ -125,6 +128,26 @@ describe('Egress-Proxy mit dem HTTP-Client des Servers', () => {
 });
 
 describe('Weiterleitung (NGINX-Variante)', () => {
+  test('trennt Verbindungen, die nichts schicken (sonst ließen sich alle Plätze mit leeren Verbindungen belegen)', async () => {
+    const target = createServer((_req, res) => res.end('ok'));
+    const targetPort = await listen(target);
+    const forwarder = createForwarder({ host: '127.0.0.1', port: targetPort }, { firstByteTimeoutMs: 200 });
+    const port = await listen(forwarder);
+    try {
+      const started = Date.now();
+      await new Promise<void>((resolve, reject) => {
+        const socket = connect(port, '127.0.0.1');
+        socket.on('close', () => resolve());
+        socket.on('error', () => {});
+        setTimeout(() => reject(new Error('Verbindung bleibt offen')), 3000);
+      });
+      assert.ok(Date.now() - started < 2000);
+    } finally {
+      await new Promise((resolve) => forwarder.close(resolve));
+      await new Promise((resolve) => target.close(resolve));
+    }
+  });
+
   test('reicht Bytes unverändert weiter, auch X-Forwarded-For', async () => {
     let seen: string | undefined;
     const target = createServer((req, res) => {

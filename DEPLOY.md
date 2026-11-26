@@ -287,11 +287,13 @@ Für das Audit-Log entsprechend mit `-v gsc-mcp_audit_data:/data` und `tar -C /d
 | `502 Bad Gateway` | Die Container laufen nicht oder hören auf einem anderen Port. Auf dem Server: `docker compose ps`, dann `curl -s http://127.0.0.1:8735/health`. `MCP_PORT` muss dem Port im Panel entsprechen. |
 | `403` mit `Invalid Host` | Das NGINX schickt einen Host, der nicht erlaubt ist. Schritt 5 (Tabelle `host`). |
 | `401` | Kein oder unbekannter Token. Mit `gsc-admin token list` nachsehen; widerrufene Tokens stehen dort nicht mehr. |
-| `429` | Zu viele Fehlversuche (Schritt 5). Bis zu 5 Minuten warten. |
+| `429` | Zu viele Fehlversuche (Schritt 5), bis zu 5 Minuten warten; oder mehr als 8 gleichzeitige Requests mit einem Token. |
+| „Limit erreicht: höchstens … Aufrufe“ | Aufruflimit je Token (`GSC_MAX_CALLS_PER_MINUTE`, `GSC_MAX_CALLS_PER_DAY`). Für geplante große Auswertungen vorübergehend erhöhen. |
 | `503` mit „nicht richtig konfiguriert“ | Die Freigabedatei ist fehlerhaft (Meldung in `docker compose logs gsc-mcp`). `gsc-admin check` zeigt die Stelle. |
 | „Property nicht verfügbar“ | Property nicht in der Whitelist des Tokens, falsch geschrieben, oder der Service Account ist in der Search Console nicht eingetragen. Das Audit-Log zeigt den Grund (`whitelist` oder `google_403`). |
 | „Anmeldung bei Google … fehlgeschlagen“ | Schlüssel ungültig oder in der Google Cloud Console gelöscht. Neuen Schlüssel mit `tenant key` einspielen. |
 | „Google ist gerade nicht erreichbar“ | Egress-Proxy oder Google nicht erreichbar: `docker compose logs egress` und Schritt 7. |
+| „Sperre von einem früheren Aufruf“ bei `gsc-admin` | Ein Aufruf wurde abgebrochen. Läuft sicher kein anderer: `docker compose run --rm -T gsc-admin unlock`. |
 | `Keine Schreibrechte` bei `gsc-admin` | `gsc-admin` mit `docker compose run --rm -T gsc-admin …` aufrufen, nicht per `exec` im Server-Container (der sieht Freigaben nur lesend). |
 | `port is already allocated` | Ein anderer Prozess nutzt den Port, z. B. ein vergessener Header-Test: `docker stop gsc-header-test`. |
 

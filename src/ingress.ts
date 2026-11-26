@@ -9,11 +9,13 @@
  */
 import { connect, createServer } from 'node:net';
 
-export function createForwarder(target: { host: string; port: number }, options: { maxConnections?: number; idleTimeoutMs?: number } = {}) {
+export function createForwarder(target: { host: string; port: number }, options: { maxConnections?: number; idleTimeoutMs?: number; firstByteTimeoutMs?: number } = {}) {
   const idle = options.idleTimeoutMs ?? 120_000;
   const server = createServer((client) => {
     const upstream = connect(target.port, target.host);
-    client.setTimeout(idle, () => client.destroy());
+    // Wer verbindet und nichts schickt, belegt nur einen Platz: nach 10 s ohne Daten wird getrennt
+    client.setTimeout(options.firstByteTimeoutMs ?? 10_000, () => client.destroy());
+    client.once('data', () => client.setTimeout(idle));
     upstream.setTimeout(idle, () => upstream.destroy());
     client.on('error', () => upstream.destroy());
     upstream.on('error', () => client.destroy());
@@ -22,7 +24,7 @@ export function createForwarder(target: { host: string; port: number }, options:
     client.pipe(upstream);
     upstream.pipe(client);
   });
-  server.maxConnections = options.maxConnections ?? 200;
+  server.maxConnections = options.maxConnections ?? 500;
   return server;
 }
 
