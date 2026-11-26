@@ -228,3 +228,25 @@ describe('Einordnung von Google-Fehlern', () => {
     assert.equal(denied.message, 'denied'); // die Google-Meldung mit dem Property-Namen geht nur ins Protokoll
   });
 });
+
+describe('Aufruflimit je Token', () => {
+  test('Nach dem Limit keine Anfrage mehr an Google; andere Tokens und gsc_whoami bleiben nutzbar', async () => {
+    const limited = await startMcp(fixture, { maxCallsPerMinute: 3 });
+    try {
+      fixture.google.reset();
+      const client = await connect(limited.url, fixture.tokens.a);
+      const results = [];
+      for (let i = 0; i < 5; i++) results.push(await client.callTool({ name: 'gsc_list_sitemaps', arguments: { property: A_PROPERTY } }));
+      assert.deepEqual(results.map((r) => Boolean(r.isError)), [false, false, false, true, true]);
+      assert.match(text(results[3]), /höchstens 3 Abfragen pro Minute/);
+      assert.equal(fixture.google.apiRequests.length, 3);
+      json(await client.callTool({ name: 'gsc_whoami', arguments: {} }));
+      await client.close();
+      const other = await connect(limited.url, fixture.tokens.b);
+      json(await other.callTool({ name: 'gsc_list_sitemaps', arguments: { property: B_PROPERTY } }));
+      await other.close();
+    } finally {
+      await limited.close();
+    }
+  });
+});

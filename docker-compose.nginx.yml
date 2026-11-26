@@ -29,6 +29,7 @@ services:
       GSC_AUDIT_RETENTION_DAYS: ${GSC_AUDIT_RETENTION_DAYS:-365}
       GSC_AUDIT_MAX_MB: ${GSC_AUDIT_MAX_MB:-100}
       GSC_MAX_INSPECTIONS_PER_DAY: ${GSC_MAX_INSPECTIONS_PER_DAY:-500}
+      GSC_MAX_CALLS_PER_MINUTE: ${GSC_MAX_CALLS_PER_MINUTE:-60}
     volumes:
       - gsc_config:/config:ro
       - gsc_keys:/run/secrets/gsc:ro

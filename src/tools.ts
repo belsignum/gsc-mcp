@@ -22,6 +22,8 @@ export interface ToolContext {
   audit: AuditLog | undefined;
   /** URL-Prüfungen je Mandant und Tag */
   inspections: Budget;
+  /** Aufrufe an Google je Token und Minute */
+  calls: Budget;
 }
 
 type TextResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
@@ -80,6 +82,7 @@ async function call(
   try {
     let api: TenantApi | undefined;
     if (options.google !== false) {
+      ctx.calls.take(ctx.identity.tokenId);
       if (!ctx.tenant) throw new GoogleError('setup', 'Der Google-Zugang deines Mandanten ist nicht eingerichtet. Bitte den Betreiber des Servers informieren.', 'Mandant fehlt in der Freigabedatei');
       api = await ctx.google.forTenant(ctx.tenant);
     }

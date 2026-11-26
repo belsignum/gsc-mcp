@@ -11,7 +11,7 @@ import { createMcpHandler } from '@modelcontextprotocol/server';
 import { hostHeaderValidation, originValidation, toNodeHandler } from '@modelcontextprotocol/node';
 import { AuditLog } from './audit.ts';
 import { bearerToken, FailureLimiter, rateLimitKey } from './auth.ts';
-import { Budget } from './budget.ts';
+import { Budget, CALL_LIMIT } from './budget.ts';
 import { flag, loadConfig } from './config.ts';
 import { GoogleClients } from './google.ts';
 import { createGscServer, SERVER_INFO } from './server.ts';
@@ -23,6 +23,8 @@ export interface HttpOptions {
   audit: AuditLog | undefined;
   /** URL-Prüfungen je Mandant und Tag; eine Instanz für alle Requests */
   inspections: Budget;
+  /** Abfragen an Google je Token und Minute; eine Instanz für alle Requests */
+  calls: Budget;
   /** Hostnamen, unter denen der Server erreichbar sein darf (Schutz vor DNS-Rebinding). */
   allowedHosts: string[];
   /** true: Client-IP aus X-Forwarded-For lesen (nur hinter einem eigenen Reverse Proxy setzen). */
@@ -73,6 +75,7 @@ export function createHttpServer(options: HttpOptions) {
         google: options.google,
         audit: options.audit,
         inspections: options.inspections,
+        calls: options.calls,
       });
     },
     { maxRequestBodySize: MAX_BODY_BYTES, onerror: (error) => log(`[gsc-mcp] ${error.message}`) },
@@ -172,6 +175,7 @@ async function main(): Promise<void> {
     google,
     audit,
     inspections: new Budget(config.maxInspectionsPerDay),
+    calls: new Budget(config.maxCallsPerMinute, { windowMs: 60_000, message: CALL_LIMIT }),
     allowedHosts,
     trustProxy,
   });

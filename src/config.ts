@@ -12,6 +12,8 @@ export interface GscConfig {
   auditMaxBytes: number;
   /** URL-Prüfungen je Mandant und Tag (0 = unbegrenzt) */
   maxInspectionsPerDay: number;
+  /** Abfragen an Google je Token und Minute (0 = unbegrenzt) */
+  maxCallsPerMinute: number;
   /** Ausgehender Proxy für alle Anfragen an Google (Egress-Allowlist), z. B. http://egress:3128 */
   egressProxy: string | undefined;
 }
@@ -45,6 +47,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GscConfig {
     auditRetentionDays: count(env, 'GSC_AUDIT_RETENTION_DAYS', 365),
     auditMaxBytes: count(env, 'GSC_AUDIT_MAX_MB', 100) * 1024 * 1024,
     maxInspectionsPerDay: count(env, 'GSC_MAX_INSPECTIONS_PER_DAY', 500),
+    maxCallsPerMinute: count(env, 'GSC_MAX_CALLS_PER_MINUTE', 60),
     egressProxy: proxyUrl(env.GSC_EGRESS_PROXY),
   };
 }
