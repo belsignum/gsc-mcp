@@ -1,0 +1,23 @@
+node_modules
+dist
+test
+scripts
+.git
+.github
+.env
+.env.*
+*.md
+docker-compose*.yml
+Caddyfile
+config
+secrets
+audit
+# Schlüssel dürfen nie in den Build-Kontext
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+*.pem
+*.key
+*.p12
+tokens.yaml

@@ -7,7 +7,7 @@
  * Nur dieser Container darf die Freigabedatei und die Schlüssel schreiben; der Server-Container sieht beides
  * nur lesend. Jede Änderung landet im Audit-Log, nie aber ein Token, ein Hash oder ein Schlüssel.
  */
-import { open, readFile, rename, rm, stat } from 'node:fs/promises';
+import { open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -76,13 +76,8 @@ async function readStdin(io: AdminIo): Promise<string> {
 /** Schreibt eine Datei atomar mit Rechten 0600. */
 async function writeSecret(file: string, text: string): Promise<void> {
   const temp = join(dirname(file), `.${randomBytes(4).toString('hex')}.tmp`);
-  const handle = await open(temp, 'wx', 0o600);
-  try {
-    await handle.writeFile(text, 'utf8');
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
+  // Ohne fsync: das Node Permission Model sperrt fsync auf Dateihandles (siehe writeConfigFile)
+  await writeFile(temp, text, { flag: 'wx', mode: 0o600 });
   await rename(temp, file).catch(async (error) => {
     await rm(temp, { force: true });
     throw error;
@@ -328,7 +323,8 @@ export async function runAdmin(argv: string[], io: AdminIo): Promise<number> {
     }
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'EROFS' || code === 'EACCES' || code === 'EPERM' || code === 'ERR_ACCESS_DENIED') {
-      io.err(`Keine Schreibrechte (${code}). gsc-admin läuft als eigener Container: docker compose run --rm -T gsc-admin …\n`);
+      const resource = (error as { resource?: string }).resource;
+      io.err(`Keine Schreibrechte (${code}${resource ? `: ${resource}` : ''}). gsc-admin läuft als eigener Container: docker compose run --rm -T gsc-admin …\n`);
       return 1;
     }
     io.err(`${error instanceof Error ? error.message : String(error)}\n`);

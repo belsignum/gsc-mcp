@@ -6,7 +6,7 @@
  * ist sie fehlerhaft, lehnt er alle Anfragen ab, statt mit einem veralteten Stand weiterzuarbeiten.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { open, readFile, rename, rm, stat } from 'node:fs/promises';
+import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { parse, stringify } from 'yaml';
 import * as z from 'zod';
@@ -180,13 +180,9 @@ export async function writeConfigFile(file: string, config: ConfigFile): Promise
   const text = serializeConfig(config);
   parseConfig(text); // nie eine Datei schreiben, die der Dienst nicht lesen könnte
   const temp = join(dirname(file), `.${basename(file)}.${randomBytes(4).toString('hex')}.tmp`);
-  const handle = await open(temp, 'wx', 0o600);
-  try {
-    await handle.writeFile(text, 'utf8');
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
+  // Ohne fsync: das Node Permission Model sperrt fsync auf Dateihandles. Geht nach einem Stromausfall
+  // der Inhalt verloren, ist die Datei leer, und eine leere Freigabedatei lässt niemanden herein.
+  await writeFile(temp, text, { flag: 'wx', mode: 0o600 });
   try {
     await rename(temp, file);
   } catch (error) {

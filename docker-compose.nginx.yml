@@ -1,0 +1,157 @@
+# Betrieb hinter einem vorhandenen NGINX, das TLS übernimmt und an einen lokalen Port weiterleitet,
+# z. B. dem NGINX einer Hosting-Verwaltungsoberfläche ("Proxy auf App-Server/Port"). Ohne Caddy.
+# Anleitung: DEPLOY.md
+#   cp .env.example .env   # Werte eintragen, COMPOSE_FILE=docker-compose.nginx.yml setzen
+#   docker compose up -d --build
+# Verwaltung (Mandanten, Tokens): docker compose run --rm -T gsc-admin --help
+#
+# Netze: Der Server hängt nur am internen Netz "internal" ohne Internetzugang. Interne Netze veröffentlichen
+# keine Ports; deshalb nimmt der Container "ingress" die Verbindungen auf 127.0.0.1:<MCP_PORT> an und reicht
+# sie unverändert an den Server weiter. Ins Internet kommt nur der Egress-Proxy, und der nur zu Google.
+
+name: gsc-mcp
+
+services:
+  gsc-mcp:
+    build: .
+    image: gsc-mcp:local
+    restart: unless-stopped
+    depends_on: [egress]
+    environment:
+      # Öffentliche Domain. Schickt das vorgeschaltete NGINX stattdessen "Host: 127.0.0.1:<port>",
+      # passt das auch: localhost und 127.0.0.1 sind immer erlaubt.
+      MCP_ALLOWED_HOSTS: ${MCP_DOMAIN:?MCP_DOMAIN in .env setzen}
+      # Nur auf true setzen, wenn das vorgeschaltete NGINX X-Forwarded-For selbst setzt oder ergänzt
+      # (DEPLOY.md, Schritt 4). Reicht es den Header des Clients unverändert durch,
+      # könnte jeder seine Adresse fälschen und das Rate-Limit umgehen.
+      MCP_TRUST_PROXY: ${MCP_TRUST_PROXY:-false}
+      GSC_EGRESS_PROXY: http://egress:3128
+      GSC_AUDIT_RETENTION_DAYS: ${GSC_AUDIT_RETENTION_DAYS:-365}
+      GSC_AUDIT_MAX_MB: ${GSC_AUDIT_MAX_MB:-100}
+      GSC_MAX_INSPECTIONS_PER_DAY: ${GSC_MAX_INSPECTIONS_PER_DAY:-500}
+    volumes:
+      - gsc_config:/config:ro
+      - gsc_keys:/run/secrets/gsc:ro
+      - audit_data:/data
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 512m
+    # Auf geteilten oder verwalteten Servern den Rechner nicht übermäßig belasten
+    cpus: 1.0
+    # Docker-Log begrenzen (der Server schreibt nur Start- und Fehlermeldungen, nie einen Token)
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "3"
+    networks: [internal]
+
+  ingress:
+    image: gsc-mcp:local
+    pull_policy: never
+    restart: unless-stopped
+    depends_on: [gsc-mcp]
+    entrypoint: ["/nodejs/bin/node", "--permission", "--disallow-code-generation-from-strings", "--allow-fs-read=/app/"]
+    command: ["/app/dist/ingress.js"]
+    environment:
+      INGRESS_TARGET: gsc-mcp:3000
+      INGRESS_PORT: "3001"
+    ports:
+      # Nur auf der Loopback-Schnittstelle: erreichbar allein für das NGINX auf demselben Server.
+      # Die Adresse 127.0.0.1 steht hier fest und lässt sich über .env nicht ändern.
+      - "127.0.0.1:${MCP_PORT:?MCP_PORT in .env setzen (der Port, an den das NGINX weiterleitet)}:3001"
+    healthcheck:
+      # prüft den ganzen Weg: Weiterleitung und Server
+      test: ["CMD", "/nodejs/bin/node", "/app/dist/healthcheck.js", "http://127.0.0.1:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 50
+    mem_limit: 128m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "3"
+    networks: [internal, published]
+
+  egress:
+    image: gsc-mcp:local
+    pull_policy: never
+    restart: unless-stopped
+    entrypoint: ["/nodejs/bin/node", "--permission", "--disallow-code-generation-from-strings", "--allow-fs-read=/app/"]
+    command: ["/app/dist/egress.js"]
+    environment:
+      EGRESS_ALLOW: oauth2.googleapis.com:443,searchconsole.googleapis.com:443
+    healthcheck:
+      test: ["CMD", "/nodejs/bin/node", "/app/dist/healthcheck.js", "http://127.0.0.1:3128/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 50
+    mem_limit: 128m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "3"
+    networks: [internal, outbound]
+
+  # Einmal-Container für die Verwaltung, ohne Netzwerk. Startet nicht mit "up", nur mit "run".
+  gsc-admin:
+    image: gsc-mcp:local
+    pull_policy: never
+    profiles: [admin]
+    entrypoint:
+      - /nodejs/bin/node
+      - --permission
+      - --disallow-code-generation-from-strings
+      - --allow-fs-read=/app/
+      - --allow-fs-read=/config/
+      - --allow-fs-write=/config/
+      - --allow-fs-read=/run/secrets/gsc/
+      - --allow-fs-write=/run/secrets/gsc/
+      - --allow-fs-read=/data/audit/
+      - --allow-fs-write=/data/audit/
+      - /app/dist/admin.js
+    command: ["--help"]
+    environment:
+      GSC_AUDIT_RETENTION_DAYS: ${GSC_AUDIT_RETENTION_DAYS:-365}
+    volumes:
+      - gsc_config:/config
+      - gsc_keys:/run/secrets/gsc
+      - audit_data:/data
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 20
+    mem_limit: 128m
+
+networks:
+  # Kein Internet, keine veröffentlichten Ports
+  internal:
+    internal: true
+  # Nur für den veröffentlichten Loopback-Port der Weiterleitung
+  published:
+  # Nur für den Egress-Proxy
+  outbound:
+
+volumes:
+  gsc_config:
+  gsc_keys:
+  audit_data:

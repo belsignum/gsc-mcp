@@ -1,0 +1,70 @@
+# PR-Check. Läuft für jeden PR ohne Pfadfilter: Lücken entstehen auch durch Änderungen an Compose-Dateien,
+# am Dockerfile oder an Abhängigkeiten. Bewusst "pull_request" und nie "pull_request_target": Code aus einem
+# PR läuft so ohne Secrets und nur mit Leserechten.
+name: Check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Wöchentlich: Image neu bauen und Abhängigkeiten gegen neue Schwachstellen prüfen
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm test
+
+  image:
+    name: Image und Compose
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Compose-Dateien gültig
+        env:
+          MCP_DOMAIN: mcp.example.com
+          MCP_PORT: "18799"
+        run: |
+          docker compose -f docker-compose.yml config -q
+          docker compose -f docker-compose.nginx.yml config -q
+      - name: Compose-Aufbau prüfen (Härtung, Egress, Zugang)
+        run: scripts/compose-check.sh
+
+  audit:
+    name: npm audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: npm audit --omit=dev --audit-level=moderate

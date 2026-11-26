@@ -1,0 +1,33 @@
+# Abhängigkeiten aktuell halten; jede Änderung kommt als PR und läuft durch den PR-Check.
+# cooldown: neue Versionen erst nach einigen Tagen vorschlagen. Kompromittierte Releases werden
+# meist innerhalb weniger Tage entdeckt und zurückgezogen.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+
+  # Basis-Images im Dockerfile sind per Digest festgelegt: ein neuer Digest bedeutet ein neu gebautes
+  # Basis-Image (Sicherheitsupdates von Debian/Alpine/Node) und kommt hier als PR.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

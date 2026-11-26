@@ -4,7 +4,6 @@
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer as createHttpsServer } from 'node:https';
 import { createServer, request, type Server } from 'node:http';
 import { connect, type AddressInfo } from 'node:net';
 import { createEgressProxy, isPublicAddress, parseAllow } from '../src/egress.ts';
@@ -94,36 +93,33 @@ describe('Egress-Proxy', () => {
 });
 
 describe('Egress-Proxy mit dem HTTP-Client des Servers', () => {
-  test('gaxios schickt Google-Anfragen per CONNECT über den Proxy; TLS bleibt Ende zu Ende', async (t) => {
-    const { generateKeyPairSync } = await import('node:crypto');
+  test('gaxios schickt Google-Anfragen per CONNECT über den Proxy; TLS bleibt Ende zu Ende', async () => {
     const { Gaxios } = await import('gaxios');
-    // Selbstsigniertes Zertifikat für den TLS-Testserver: der Proxy sieht nur verschlüsselte Bytes
-    const { execFileSync } = await import('node:child_process');
-    let cert: string;
-    let key: string;
-    try {
-      const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
-      key = pair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
-      cert = execFileSync('openssl', ['req', '-x509', '-key', '/dev/stdin', '-subj', '/CN=searchconsole.googleapis.com', '-days', '1'], { input: key }).toString();
-    } catch {
-      t.skip('openssl fehlt');
-      return;
-    }
-    const tls = createHttpsServer({ key, cert }, (_req, res) => res.end('{"siteEntry":[]}'));
-    const tlsPort = await listen(tls);
+    const { createServer: createTcpServer } = await import('node:net');
+    // Das Ziel spricht kein TLS. Dass der Client daran scheitert, zeigt: der TLS-Handshake läuft durch den
+    // Tunnel bis zum Ziel; der Proxy terminiert kein TLS und kann nicht mitlesen.
+    let received = '';
+    const target = createTcpServer((socket) => {
+      socket.once('data', (chunk) => {
+        received = chunk.toString('latin1');
+        socket.end('HTTP/1.1 200 OK\r\n\r\nkein TLS');
+      });
+    });
+    const targetPort = await listen(target);
     const targets: string[] = [];
-    const proxy = createEgressProxy({ allow: parseAllow(`searchconsole.googleapis.com:${tlsPort}`), resolve: async () => ['127.0.0.1'], allowPrivate: true, log: () => {} });
+    const proxy = createEgressProxy({ allow: parseAllow(`searchconsole.googleapis.com:${targetPort}`), resolve: async () => ['127.0.0.1'], allowPrivate: true, log: () => {} });
     proxy.prependListener('connect', (req) => targets.push(String(req.url)));
     const proxyPort = await listen(proxy);
     try {
-      const client = new Gaxios({ proxy: `http://127.0.0.1:${proxyPort}`, maxRedirects: 0 });
-      // Das Zertifikat des Testservers ist selbstsigniert. Dass der Client es zu sehen bekommt und ablehnt,
-      // zeigt: TLS läuft durch den Tunnel bis zum Ziel, der Proxy kann nicht mitlesen.
-      await assert.rejects(client.request({ url: `https://searchconsole.googleapis.com:${tlsPort}/webmasters/v3/sites` }), /self-signed certificate/);
-      assert.deepEqual(targets, [`searchconsole.googleapis.com:${tlsPort}`]);
+      const client = new Gaxios({ proxy: `http://127.0.0.1:${proxyPort}`, maxRedirects: 0, retry: false });
+      await assert.rejects(client.request({ url: `https://searchconsole.googleapis.com:${targetPort}/webmasters/v3/sites` }));
+      assert.deepEqual(targets, [`searchconsole.googleapis.com:${targetPort}`]);
+      // Beim Ziel kam ein TLS-ClientHello an (Record-Typ 0x16), kein Klartext-HTTP
+      assert.equal(received.charCodeAt(0), 0x16);
+      assert.ok(!received.includes('GET /webmasters'));
     } finally {
       await new Promise((resolve) => proxy.close(resolve));
-      await new Promise((resolve) => tls.close(resolve));
+      await new Promise((resolve) => target.close(resolve));
     }
   });
 });
