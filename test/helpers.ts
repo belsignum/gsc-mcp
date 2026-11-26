@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { AuditLog } from '../src/audit.ts';
-import { Budget, CALL_LIMIT } from '../src/budget.ts';
+import { Budget, CALL_LIMIT, DAILY_LIMIT } from '../src/budget.ts';
 import { GoogleClients } from '../src/google.ts';
 import { createHttpServer, type HttpOptions } from '../src/http.ts';
 import { generateToken, generateTokenId, hashToken, TokenStore, writeConfigFile, type ConfigFile } from '../src/tokens.ts';
@@ -67,12 +67,17 @@ export async function makeFixture(): Promise<Fixture> {
 }
 
 /** Startet den MCP-HTTP-Server gegen den Google-Nachbau. */
-export async function startMcp(fixture: Fixture, overrides: Partial<HttpOptions> & { maxInspectionsPerDay?: number; maxCallsPerMinute?: number; auditMaxBytes?: number } = {}) {
-  const { maxInspectionsPerDay = 500, maxCallsPerMinute = 1000, auditMaxBytes, ...options } = overrides;
+export async function startMcp(
+  fixture: Fixture,
+  overrides: Partial<HttpOptions> & { maxInspectionsPerDay?: number; maxCallsPerMinute?: number; maxCallsPerDay?: number; auditMaxBytes?: number } = {},
+) {
+  const { maxInspectionsPerDay = 500, maxCallsPerMinute = 1000, maxCallsPerDay = 10_000, auditMaxBytes, ...options } = overrides;
   const audit = await AuditLog.open(fixture.auditDir, { maxBytes: auditMaxBytes });
   const store = await TokenStore.open(fixture.configFile, { checkIntervalMs: 0 });
   const google = new GoogleClients({ keyDir: fixture.keyDir, fetchImplementation: fixture.google.fetchImplementation, keyCheckIntervalMs: 0 });
-  const { server, close } = createHttpServer({ store, google, audit, inspections: new Budget(maxInspectionsPerDay), calls: new Budget(maxCallsPerMinute, { windowMs: 60_000, message: CALL_LIMIT }), allowedHosts: [], log: () => {}, ...options });
+  const { server, close } = createHttpServer({ store, google, audit, inspections: new Budget(maxInspectionsPerDay), calls: new Budget(maxCallsPerMinute, { windowMs: 60_000, message: CALL_LIMIT }),
+    daily: new Budget(maxCallsPerDay, { message: DAILY_LIMIT }),
+    allowedHosts: [], log: () => {}, ...options });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
   return {

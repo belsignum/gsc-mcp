@@ -230,24 +230,56 @@ describe('Einordnung von Google-Fehlern', () => {
 });
 
 describe('Aufruflimit je Token', () => {
-  test('Nach dem Limit keine Anfrage mehr an Google; andere Tokens und gsc_whoami bleiben nutzbar', async () => {
+  test('Jeder Aufruf zählt, auch abgelehnte; danach kein Request an Google, andere Tokens bleiben nutzbar', async () => {
     const limited = await startMcp(fixture, { maxCallsPerMinute: 3 });
     try {
       fixture.google.reset();
+      const before = (await auditLines()).length;
       const client = await connect(limited.url, fixture.tokens.a);
       const results = [];
-      for (let i = 0; i < 5; i++) results.push(await client.callTool({ name: 'gsc_list_sitemaps', arguments: { property: A_PROPERTY } }));
-      assert.deepEqual(results.map((r) => Boolean(r.isError)), [false, false, false, true, true]);
-      assert.match(text(results[3]), /höchstens 3 Abfragen pro Minute/);
-      assert.equal(fixture.google.apiRequests.length, 3);
-      json(await client.callTool({ name: 'gsc_whoami', arguments: {} }));
+      // zwei abgelehnte (fremde Property) und ein erlaubter Aufruf verbrauchen das Limit
+      results.push(await client.callTool({ name: 'gsc_list_sitemaps', arguments: { property: B_PROPERTY } }));
+      results.push(await client.callTool({ name: 'gsc_whoami', arguments: {} }));
+      results.push(await client.callTool({ name: 'gsc_list_sitemaps', arguments: { property: A_PROPERTY } }));
+      for (let i = 0; i < 5; i++) results.push(await client.callTool({ name: 'gsc_list_sitemaps', arguments: { property: i % 2 ? A_PROPERTY : B_PROPERTY } }));
+      assert.deepEqual(results.map((r) => Boolean(r.isError)), [true, false, false, true, true, true, true, true]);
+      for (const r of results.slice(3)) assert.match(text(r), /höchstens 3 Aufrufe pro Minute/);
+      assert.equal(fixture.google.apiRequests.length, 1);
       await client.close();
+      // Ins Audit-Log kommen die drei Aufrufe und nur die erste Ablehnung wegen des Limits
+      const added = (await auditLines()).slice(before);
+      assert.equal(added.length, 4);
+      assert.equal(added.filter((l) => l.reason === 'limit').length, 1);
       const other = await connect(limited.url, fixture.tokens.b);
       json(await other.callTool({ name: 'gsc_list_sitemaps', arguments: { property: B_PROPERTY } }));
       await other.close();
     } finally {
       await limited.close();
     }
+  });
+
+  test('Tageslimit', async () => {
+    const limited = await startMcp(fixture, { maxCallsPerDay: 2 });
+    try {
+      const client = await connect(limited.url, fixture.tokens.a2);
+      for (let i = 0; i < 2; i++) json(await client.callTool({ name: 'gsc_whoami', arguments: {} }));
+      assert.match(text(await client.callTool({ name: 'gsc_whoami', arguments: {} })), /höchstens 2 Aufrufe pro Tag/);
+      await client.close();
+    } finally {
+      await limited.close();
+    }
+  });
+
+  test('Audit-Zeilen bleiben klein, auch mit langen Filtern', async () => {
+    const client = await connect(mcp.url, fixture.tokens.a2);
+    const filters = Array.from({ length: 20 }, () => ({ dimension: 'query', operator: 'contains', expression: 'x'.repeat(4000) }));
+    await client.callTool({ name: 'gsc_search_analytics', arguments: { property: B_PROPERTY, startDate: '2026-10-01', endDate: '2026-10-02', filters } });
+    await client.close();
+    const files = (await readdir(fixture.auditDir)).filter((f) => f.endsWith('.jsonl'));
+    const lines = (await Promise.all(files.map((f) => readFile(join(fixture.auditDir, f), 'utf8')))).join('').split('\n').filter(Boolean);
+    for (const line of lines) assert.ok(Buffer.byteLength(line) <= 2048, `Zeile mit ${Buffer.byteLength(line)} Bytes`);
+    const last = JSON.parse(lines.findLast((l) => l.includes('gsc_search_analytics') && l.includes(B_PROPERTY))!);
+    assert.equal(last.result, 'denied');
   });
 });
 

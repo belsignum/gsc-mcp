@@ -12,6 +12,10 @@ updates:
     groups:
       npm-minor-patch:
         update-types: [minor, patch]
+    # Die Typen folgen der Node-Version der Laufzeit (distroless nodejs24); ein Wechsel ist eine eigene Entscheidung
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
 
   # Basis-Images im Dockerfile sind per Digest festgelegt: ein neuer Digest bedeutet ein neu gebautes
   # Basis-Image (Sicherheitsupdates von Debian/Alpine/Node) und kommt hier als PR.
@@ -19,6 +23,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Build-Image und Laufzeit-Image (distroless nodejs24) müssen dieselbe Node-Hauptversion haben;
+    # ein Wechsel auf die nächste LTS kommt als eigener PR für beide zusammen.
+    ignore:
+      - dependency-name: node
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: docker-compose
     directory: /

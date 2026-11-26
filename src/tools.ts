@@ -22,8 +22,10 @@ export interface ToolContext {
   audit: AuditLog | undefined;
   /** URL-Prüfungen je Mandant und Tag */
   inspections: Budget;
-  /** Aufrufe an Google je Token und Minute */
+  /** Aufrufe je Token und Minute */
   calls: Budget;
+  /** Aufrufe je Token und Tag */
+  daily: Budget;
 }
 
 type TextResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
@@ -73,6 +75,17 @@ async function call(
 
   if (ctx.audit?.full) return fail(AUDIT_FAILED);
 
+  // Jeder Aufruf zählt, auch abgelehnte: sonst ließe sich das Audit-Log mit billigen Aufrufen füllen.
+  // Von den Ablehnungen wegen des Limits kommt nur die erste ins Log.
+  try {
+    ctx.calls.take(ctx.identity.tokenId);
+    ctx.daily.take(ctx.identity.tokenId);
+  } catch (error) {
+    if (!(error instanceof BudgetError)) throw error;
+    if (error.first) await log('denied', { reason: 'limit' }).catch(() => {});
+    return fail(error.message);
+  }
+
   if (property !== undefined && !ctx.identity.properties.includes(property)) {
     await log('denied', { reason: 'whitelist' }).catch(() => {});
     return notAvailable();
@@ -82,7 +95,6 @@ async function call(
   try {
     let api: TenantApi | undefined;
     if (options.google !== false) {
-      ctx.calls.take(ctx.identity.tokenId);
       if (!ctx.tenant) throw new GoogleError('setup', 'Der Google-Zugang deines Mandanten ist nicht eingerichtet. Bitte den Betreiber des Servers informieren.', 'Mandant fehlt in der Freigabedatei');
       api = await ctx.google.forTenant(ctx.tenant);
     }
@@ -362,10 +374,12 @@ export function registerTools(ctx: ToolContext): void {
     },
     (input) =>
       call(ctx, 'gsc_inspect_url', input.property, { url: input.url, languageCode: input.languageCode }, async (api) => {
-        if (!urlInProperty(input.url, input.property)) throw new LocalError('url_outside_property', 'Die URL gehört nicht zu dieser Property.');
+        // Geprüft und an Google geschickt wird dieselbe, normalisierte Form der URL
+        const url = new URL(input.url).href;
+        if (!urlInProperty(url, input.property)) throw new LocalError('url_outside_property', 'Die URL gehört nicht zu dieser Property.');
         ctx.inspections.take(ctx.identity.tenant);
-        const response = await api!.inspect(input.property, input.url, input.languageCode);
-        return { data: { property: input.property, url: input.url, ...response.inspectionResult }, rows: 1 };
+        const response = await api!.inspect(input.property, url, input.languageCode);
+        return { data: { property: input.property, url, ...response.inspectionResult }, rows: 1 };
       }),
   );
 }

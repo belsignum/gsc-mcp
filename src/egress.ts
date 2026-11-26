@@ -7,8 +7,9 @@
  * oauth2.googleapis.com:443 und searchconsole.googleapis.com:443. TLS bleibt Ende zu Ende zwischen Server
  * und Google; der Proxy sieht nur Zielname und Datenmenge.
  *
- * Löst ein erlaubter Name auf eine private, lokale oder sonst nicht öffentliche Adresse auf (manipuliertes DNS),
- * wird die Verbindung abgelehnt. Klartext-HTTP über den Proxy gibt es nicht.
+ * Verbunden wird nur über IPv4. Löst ein erlaubter Name auf eine private, lokale oder sonst nicht öffentliche
+ * Adresse auf (manipuliertes DNS), wird die Verbindung abgelehnt. IPv6 bleibt ganz außen vor: Übersetzungsbereiche
+ * wie NAT64, 6to4 oder Teredo können auf beliebige IPv4-Adressen zeigen. Klartext-HTTP über den Proxy gibt es nicht.
  */
 import { createServer, type IncomingMessage } from 'node:http';
 import { BlockList, connect, isIP, type Socket } from 'node:net';
@@ -36,28 +37,9 @@ for (const [net, prefix] of [
 ] as const) {
   BLOCKED.addSubnet(net, prefix, 'ipv4');
 }
-for (const [net, prefix] of [
-  ['::', 128],
-  ['::1', 128],
-  ['64:ff9b:1::', 48],
-  ['100::', 64],
-  ['2001:db8::', 32],
-  ['fc00::', 7],
-  ['fe80::', 10],
-  ['ff00::', 8],
-] as const) {
-  BLOCKED.addSubnet(net, prefix, 'ipv6');
-}
-
+/** true nur für öffentliche IPv4-Adressen. IPv6 gilt nie als öffentlich (siehe oben). */
 export function isPublicAddress(address: string): boolean {
-  const family = isIP(address);
-  if (family === 4) return !BLOCKED.check(address, 'ipv4');
-  if (family === 6) {
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
-    if (mapped) return !BLOCKED.check(mapped[1], 'ipv4');
-    return !BLOCKED.check(address, 'ipv6');
-  }
-  return false;
+  return isIP(address) === 4 && !BLOCKED.check(address, 'ipv4');
 }
 
 /** Liest die Allowlist ("host:port,host:port"). */
@@ -82,7 +64,7 @@ export interface EgressOptions {
 }
 
 async function defaultResolve(host: string): Promise<string[]> {
-  return (await lookup(host, { all: true, order: 'ipv4first' })).map((entry) => entry.address);
+  return (await lookup(host, { all: true, family: 4 })).map((entry) => entry.address);
 }
 
 export function createEgressProxy(options: EgressOptions) {

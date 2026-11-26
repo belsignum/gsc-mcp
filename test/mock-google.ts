@@ -77,6 +77,8 @@ export async function startMockGoogle(accounts: ServiceAccount[]) {
   /** Für Tests: nächste Antworten der API erzwingen (Status + Body) */
   const forced: Array<{ status: number; body: unknown }> = [];
   let total = 0;
+  /** Für Tests: Antworten der API verzögern */
+  const control = { delayMs: 0 };
 
   const server: Server = createServer(async (req, res) => {
     total += 1;
@@ -116,6 +118,7 @@ export async function startMockGoogle(accounts: ServiceAccount[]) {
     const body = raw ? JSON.parse(raw) : undefined;
     apiRequests.push({ method: req.method ?? 'GET', path: url.pathname, account: email, body });
     if (!email) return send(401, { error: { code: 401, message: 'Request had invalid authentication credentials.', status: 'UNAUTHENTICATED' } });
+    if (control.delayMs) await new Promise((resolve) => setTimeout(resolve, control.delayMs));
     const next = forced.shift();
     if (next) return send(next.status, next.body);
     const account = byEmail.get(email)!;
@@ -176,6 +179,7 @@ export async function startMockGoogle(accounts: ServiceAccount[]) {
     tokenRequests,
     apiRequests,
     forced,
+    control,
     fetchImplementation,
     /** Anzahl aller Requests an "Google" (Token-Endpunkt und API, auch abgelehnte) */
     get requestCount() {

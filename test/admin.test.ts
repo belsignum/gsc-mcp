@@ -126,6 +126,21 @@ describe('gsc-admin', () => {
     assert.doesNotMatch(raw, /gsc_[A-Za-z0-9_-]{43}|PRIVATE KEY|[0-9a-f]{64}/);
   });
 
+  test('Liegengebliebene Sperre wird nie automatisch entfernt, nur mit unlock', async () => {
+    const { writeFile, utimes } = await import('node:fs/promises');
+    const lock = join(dir, 'config', '.gsc-admin.lock');
+    await writeFile(lock, '');
+    const old = new Date(Date.now() - 10 * 60_000);
+    await utimes(lock, old, old);
+    const blocked = await admin('token add --user anna --tenant kunde-b --property sc-domain:example.com');
+    assert.equal(blocked.code, 2);
+    assert.match(blocked.err, /gsc-admin unlock/);
+    assert.equal(blocked.out, '');
+    assert.equal((await admin('unlock')).code, 0);
+    await assert.rejects(stat(lock));
+    assert.equal((await admin('token add --user anna --tenant kunde-b --property sc-domain:example.com')).code, 0);
+  });
+
   test('Unbekannte Befehle und Optionen', async () => {
     assert.equal((await admin('token delete x')).code, 2);
     assert.equal((await admin('token add --admin')).code, 2);
