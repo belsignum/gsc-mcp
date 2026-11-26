@@ -254,6 +254,14 @@ scripts/compose-check.sh   # Compose-Aufbau mit Wegwerf-Schlüssel prüfen (Dock
 
 Node.js ≥ 24. Der Quellcode in `src/` läuft dank Type-Stripping direkt mit Node; `npm run build` erzeugt `dist/` für Docker.
 
+### Rauchtest am echten Konto
+
+```bash
+node scripts/smoke-google.ts /pfad/zum/schluessel.json sc-domain:example.com https://www.example.com/
+```
+
+Meldet sich mit dem Schlüssel bei Google an und prüft Properties, Leistungsdaten, Sitemaps und, mit URL, die URL-Prüfung. Ausgegeben werden nur Zusammenfassungen, keine Suchanfragen. Ändert nichts bei Google.
+
 Jeder PR durchläuft den Check in `.github/workflows/check.yml`: Tests, Typprüfung, Aufbau und Prüfung des Compose-Aufbaus, `npm audit`. Dependabot schlägt Updates für npm, Basis-Images, Compose und Actions als PR vor.
 
 ## Lizenz
