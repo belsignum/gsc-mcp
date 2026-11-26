@@ -121,10 +121,23 @@ Verwaltet wird nur auf dem Server, mit `gsc-admin`. Das ist ein eigener Einmal-C
 docker compose run --rm -T gsc-admin --help
 ```
 
+### Welche Namen zusammenpassen müssen
+
+Mandant und Nutzer sind Namen, die du im Dienst frei wählst. Sie müssen weder zum Dienstkonto noch zum Google-Cloud-Projekt passen. Die Verbindung zu Google entsteht allein über den Schlüssel: `tenant add` liest den Service Account aus dem Schlüssel (`client_email`) und trägt ihn beim Mandanten ein.
+
+| Name | Woher | Muss passen zu |
+|---|---|---|
+| Mandant, z. B. `kunde-a` | frei gewählt bei `tenant add`; Kleinbuchstaben, Ziffern, Bindestriche, höchstens 63 Zeichen | nichts bei Google. Bei `token add --tenant`, `tenant key` und `tenant remove` genau diesem Namen |
+| Nutzer, z. B. `anna` | frei gewählt bei `token add --user`; Buchstaben, Ziffern, `.`, `_`, `@`, `-`, höchstens 64 Zeichen, also auch eine E-Mail-Adresse | nichts. Er steht im Audit-Log und in `gsc_whoami`, damit nachvollziehbar ist, wer einen Token nutzt |
+| Service Account, z. B. `gsc-kunde-a@projekt.iam.gserviceaccount.com` | aus dem Schlüssel; `tenant list` zeigt die Zuordnung | der Adresse, die in der Search Console bei den Properties des Mandanten eingetragen ist |
+| Name des Dienstkontos, Projektname, Dateiname des Schlüssels | frei | nichts |
+
+Ein Mandant hat genau einen Service Account, und ein Service Account gehört zu höchstens einem Mandanten. `tenant key` nimmt deshalb nur einen neuen Schlüssel desselben Service Accounts an.
+
 ### 1. Service Account bei Google anlegen (je Mandant einmal)
 
 1. In der [Google Cloud Console](https://console.cloud.google.com/) ein Projekt wählen oder anlegen und die **Google Search Console API** aktivieren.
-2. Unter **IAM & Verwaltung → Dienstkonten** ein Dienstkonto je Mandant anlegen, z. B. `gsc-kunde-a`. **Keine** Rollen vergeben, keine domainweite Delegation.
+2. Unter **IAM & Verwaltung → Dienstkonten** ein Dienstkonto je Mandant anlegen, z. B. `gsc-kunde-a`; der Name ist frei wählbar. **Keine** Rollen vergeben, keine domainweite Delegation.
 3. Beim Dienstkonto unter **Schlüssel → Schlüssel hinzufügen → JSON** einen Schlüssel erzeugen. Die Datei wird einmal heruntergeladen.
 4. In der **Search Console** bei jeder Property des Mandanten unter **Einstellungen → Nutzer und Berechtigungen** die E-Mail-Adresse des Dienstkontos mit der Berechtigung **„Eingeschränkt“** hinzufügen. Nur bei diesem Mandanten.
 
