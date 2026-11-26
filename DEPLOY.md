@@ -194,7 +194,7 @@ ssh benutzer@server 'cd ~/gsc-mcp && docker compose run --rm -T gsc-admin tenant
 ssh benutzer@server 'cd ~/gsc-mcp && docker compose run --rm -T gsc-admin token add --user anna --tenant kunde-a --property sc-domain:example.com'
 ```
 
-Der Token erscheint genau einmal. Alle Befehle stehen in der [README](README.md#mandanten-und-tokens-verwalten).
+`kunde-a` und `anna` wählst du frei; sie müssen nicht zum Dienstkonto passen. Den Service Account liest `gsc-admin` aus dem Schlüssel ([welche Namen zusammenpassen müssen](README.md#welche-namen-zusammenpassen-müssen)). Der Token erscheint genau einmal. Alle Befehle stehen in der [README](README.md#mandanten-und-tokens-verwalten).
 
 ## 9. Von außen prüfen
 
