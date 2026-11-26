@@ -7,6 +7,8 @@
  *
  * Angefordert wird immer nur der Scope webmasters.readonly. Weiterleitungen werden nicht verfolgt.
  */
+// Erster Import: schaltet das Debug-Logging der Google-Bibliotheken ab, bevor sie geladen werden
+import './quiet-google.ts';
 import { createPrivateKey } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -189,12 +191,6 @@ export class GoogleClients {
   constructor(options: GoogleOptions) {
     this.#options = options;
     this.#now = options.now ?? Date.now;
-    // Das Debug-Logging der Google-Bibliotheken schreibt Access Tokens und signierte JWTs ins Log (nachgestellt).
-    // Es bleibt deshalb immer aus, auch wenn die Variable gesetzt ist.
-    if (process.env.GOOGLE_SDK_NODE_LOGGING !== undefined) {
-      delete process.env.GOOGLE_SDK_NODE_LOGGING;
-      console.error('[gsc-mcp] GOOGLE_SDK_NODE_LOGGING wird ignoriert: das Debug-Logging würde Access Tokens ins Log schreiben.');
-    }
   }
 
   keyFile(tenant: string): string {

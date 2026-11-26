@@ -252,16 +252,17 @@ describe('Aufruflimit je Token', () => {
 });
 
 describe('Debug-Logging der Google-Bibliotheken', () => {
-  test('GOOGLE_SDK_NODE_LOGGING wird beim Start entfernt (würde Access Tokens loggen)', async () => {
-    const { GoogleClients } = await import('../src/google.ts');
-    process.env.GOOGLE_SDK_NODE_LOGGING = '*';
-    const original = console.error;
-    console.error = () => {};
-    try {
-      new GoogleClients({ keyDir: fixture.keyDir });
-    } finally {
-      console.error = original;
-    }
-    assert.equal(process.env.GOOGLE_SDK_NODE_LOGGING, undefined);
+  test('GOOGLE_SDK_NODE_LOGGING ist abgeschaltet, bevor die Google-Bibliotheken laden (würde Access Tokens loggen)', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const script = `
+      await import(${JSON.stringify(new URL('../src/google.ts', import.meta.url).href)});
+      const { log, placeholder } = await import('google-logging-utils');
+      process.stdout.write(JSON.stringify({ env: process.env.GOOGLE_SDK_NODE_LOGGING ?? null, quiet: log('auth') === placeholder }));`;
+    const output = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      env: { ...process.env, GOOGLE_SDK_NODE_LOGGING: '*' },
+      cwd: new URL('..', import.meta.url),
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).toString();
+    assert.deepEqual(JSON.parse(output), { env: null, quiet: true });
   });
 });
